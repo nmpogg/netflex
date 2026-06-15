@@ -2,18 +2,17 @@ import pandas as pd
 import numpy as np
 
 def load_video_features(feature_path):
-    print("1. Đang tải và xử lý Video Features...")
+    print("1. Đang tải Video Features (Action Context)...")
     df_feat = pd.read_csv(feature_path)
     
-    # 1. Chuẩn hóa đặc trưng liên tục (Duration)
+    # Chuẩn hóa thời lượng
     max_duration = df_feat['video_duration'].max()
     df_feat['duration_norm'] = df_feat['video_duration'] / (max_duration + 1e-5)
     
-    # 2. Mã hóa đặc trưng phân loại (Author, Music) về dạng index từ 0 -> N
+    # Mã hóa nhãn (Label Encoding)
     df_feat['author_code'] = df_feat['author_id'].astype('category').cat.codes
     df_feat['music_code'] = df_feat['music_id'].astype('category').cat.codes
     
-    # 3. Tạo Dictionary siêu tốc [duration, author_idx, music_idx]
     video_feature_dict = {}
     for _, row in df_feat.iterrows():
         vid = int(row['video_id'])
@@ -25,14 +24,37 @@ def load_video_features(feature_path):
     
     return video_feature_dict, num_videos, num_authors, num_musics
 
+
+def load_user_features(feature_path):
+    print("2. Đang tải User Features (Static Persona)...")
+    df_user = pd.read_csv(feature_path)
+    
+    cols_to_norm = ['follow_user_num', 'fans_user_num', 'register_days']
+    cols_binary = ['is_live_streamer', 'is_video_author', 'is_lowactive_period']
+    
+    # Chuẩn hóa Min-Max
+    for col in cols_to_norm:
+        df_user[col] = df_user[col] / (df_user[col].max() + 1e-5)
+        
+    user_feature_dict = {}
+    for _, row in df_user.iterrows():
+        uid = int(row['user_id'])
+        user_feature_dict[uid] = [row[c] for c in cols_binary + cols_to_norm]
+        
+    num_users = int(df_user['user_id'].max()) + 1
+    user_feature_dim = len(cols_binary + cols_to_norm)
+    
+    return user_feature_dict, num_users, user_feature_dim
+
+
 def load_logs_and_build_mdp(log_path, seq_len=3, train_ratio=0.8):
-    print("2. Đang tải Log tương tác và xây dựng MDP...")
+    print("3. Đang tải Log và xây dựng Markov Decision Process...")
     cols = ['user_id', 'video_id', 'time_ms', 'is_click', 'is_like', 
             'is_follow', 'is_comment', 'is_forward', 'is_hate', 'play_time_ms', 'duration_ms']
     df = pd.read_csv(log_path, usecols=cols)
     df = df[df['duration_ms'] > 0]
     
-    # Tính Hàm phần thưởng đa tầng
+    # Reward Shaping
     df['watch_ratio'] = (df['play_time_ms'] / df['duration_ms']).clip(upper=1.5)
     r_watch = 2.0 * np.log1p(df['watch_ratio']) 
     r_engage = (5.0 * df['is_like']) + (10.0 * df['is_comment']) + (10.0 * df['is_forward']) + (15.0 * df['is_follow'])
@@ -41,8 +63,8 @@ def load_logs_and_build_mdp(log_path, seq_len=3, train_ratio=0.8):
     
     df['reward'] = r_watch + r_engage - r_penalty
     df['behavior_context'] = df[['watch_ratio', 'is_like', 'is_comment', 'is_hate']].values.tolist()
-    df = df.sort_values(by=['user_id', 'time_ms'])
     
+    df = df.sort_values(by=['user_id', 'time_ms'])
     trajectories = []
     all_interactions_videos = df['video_id'].unique().tolist()
     
